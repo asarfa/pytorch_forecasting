@@ -130,7 +130,7 @@ class TimeSynchronizedBatchSampler(GroupedSampler):
         decoder_lengths = data_source.calculate_decoder_length(last_time, index.sequence_length)
         first_prediction_time = index.time + index.sequence_length - decoder_lengths + 1
         groups = pd.RangeIndex(0, len(index.index)).groupby(first_prediction_time)
-        def concatenate_groups(groups, group_size=60):
+        def concatenate_groups(groups, group_size=self.batch_size//14):
             concatenated_groups = {}
             all_keys = sorted(groups.keys())
 
