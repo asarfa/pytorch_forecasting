@@ -130,32 +130,4 @@ class TimeSynchronizedBatchSampler(GroupedSampler):
         decoder_lengths = data_source.calculate_decoder_length(last_time, index.sequence_length)
         first_prediction_time = index.time + index.sequence_length - decoder_lengths + 1
         groups = pd.RangeIndex(0, len(index.index)).groupby(first_prediction_time)
-
-        def concatenate_groups(groups, group_size=self.batch_size//14):
-            concatenated_groups = {}
-            all_keys = sorted(groups.keys())
-
-            # Total number of new groups
-            new_group_count = int(np.ceil(len(all_keys) / group_size))
-
-            for i in range(new_group_count):
-                # Calculate the start and end indices for slicing
-                start_idx = i * group_size
-                end_idx = min((i + 1) * group_size, len(all_keys))
-
-                # Get the keys for this slice
-                slice_keys = all_keys[start_idx:end_idx]
-
-                # Concatenate the values for this group of keys
-                concatenated_values = []
-                for key in slice_keys:
-                    concatenated_values.extend(groups[key])
-
-                # Assign the concatenated list to the new group
-                concatenated_groups[i] = concatenated_values
-
-            return concatenated_groups
-
-        # Apply the function
-        groups = concatenate_groups(groups)
         return groups
