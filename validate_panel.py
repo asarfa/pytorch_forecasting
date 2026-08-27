@@ -12,7 +12,7 @@ WHAT IT ANSWERS
    span, at what frequency, and with what shape. This resolves the questions a
    start-date table cannot: is LUMSMD daily or monthly, are the PD* series
    levels or changes, is anything a step function or a pegged feed.
-2. The ASW oracle: does USSFCT{n} really equal -(USGG{n}YR - USS0{n}) * 100?
+2. The ASW oracle: does USSFCT{n} really equal -(USGG{n}YR - USSO{n}) * 100?
    That single check pins the sign convention AND the unit convention for
    every asset-swap measure in the contract, over the ~5-year overlap.
 3. Fat-tail measurement: the analytic power estimates assumed normality.
