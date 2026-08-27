@@ -69,7 +69,10 @@ OTHER = [
     "CESIUSD",                           # macro surprise proxy
     "FARBAST",                           # balance sheet
     "GDBR10", "GBTPGR10",                # cross-market / peripheral
-    "PDPPTOTG", "PDPPTOTF", "PDPCPCCS", "PDPPPCCS", "PDPPCC11", "PDPPCC3-6",
+    # Both spellings: the start-date table said PDPPCC11/PDPPCC3-6 while the
+    # CSV headers say pdppc11/pdppc3-6. Ask for both, let the panel decide.
+    "PDPPTOTG", "PDPPTOTF", "PDPCPCCS", "PDPPPCCS",
+    "PDPPCC11", "PDPPCC3-6", "PDPPC11", "PDPPC3-6",
     "FDTR", "FEDL01",                    # expected absent; confirms the request
 ]
 
@@ -92,44 +95,109 @@ def _strip_suffix(name: str) -> str:
     return name
 
 
+def _squash(name):
+    """Uppercase, strip every non-alphanumeric, then drop a trailing suffix.
+
+    The tier-1 and tier-2 keys assume the separator between ticker and suffix
+    is ordinary whitespace. A real Bloomberg export defeated that -- eight
+    USS0* columns were visibly present and still resolved to None -- so this
+    tier throws away the separator entirely: "USS02 Curncy", "USS02_Curncy"
+    and "USS02Curncy" all squash to "USS02".
+    """
+    squashed = re.sub(r"[^A-Z0-9]", "", str(name).upper())
+    for suffix in ("INDEX", "CURNCY", "COMDTY", "EQUITY", "GOVT", "CORP"):
+        if squashed.endswith(suffix) and len(squashed) > len(suffix):
+            return squashed[: -len(suffix)]
+    return squashed
+
+
 def build_column_index(columns: Sequence[object]) -> Dict[str, object]:
     """Map a bare ticker (USGG10YR) to whatever the CSV actually calls it."""
     index: Dict[str, object] = {}
     for col in columns:
         normalized = _norm(col)
-        for key in {normalized, _strip_suffix(normalized)}:
+        for key in {normalized, _strip_suffix(normalized), _squash(col)}:
             index.setdefault(key, col)
     return index
 
 
-def resolve(index: Dict[str, object], ticker: str) -> Optional[object]:
-    return index.get(_norm(ticker)) or index.get(_strip_suffix(_norm(ticker)))
+def resolve(index, ticker):
+    return (index.get(_norm(ticker))
+            or index.get(_strip_suffix(_norm(ticker)))
+            or index.get(_squash(ticker)))
 
 
 # --------------------------------------------------------------------------
 # Loading
 # --------------------------------------------------------------------------
 
-def load_panel(path: str, date_column: Optional[str],
-               dayfirst: bool = False) -> pd.DataFrame:
+DATE_COLUMN_NAMES = ("DATE", "DATES", "DT", "OBSERVATION_DATE", "INDEX")
+
+
+def _looks_like_dates(series, dayfirst):
+    """Parse a column as dates, but ONLY if it is genuinely date-like.
+
+    A numeric column must never qualify. pd.to_datetime happily reads a float
+    as nanoseconds since the epoch, so a column of yields parses cleanly into
+    a wall of 1970-01-01 timestamps -- 100% non-null and completely wrong. An
+    earlier version of this script accepted exactly that and produced a full
+    report in which every episode collapsed into one cluster. Reject numeric
+    dtypes outright, then require the result to span a plausible range.
+    """
+    if pd.api.types.is_numeric_dtype(series):
+        return None
+    parsed = pd.to_datetime(series, errors="coerce", dayfirst=dayfirst)
+    if parsed.notna().mean() <= 0.9:
+        return None
+    observed = parsed.dropna()
+    if (observed.max() - observed.min()).days < 365:
+        return None
+    if observed.min() < pd.Timestamp("1900-01-01"):
+        return None
+    return parsed
+
+
+def load_panel(path, date_column, dayfirst=False):
     frame = pd.read_csv(path)
 
-    if date_column is None:
-        # Take the first column that parses as dates for most of its rows.
-        for candidate in frame.columns:
-            parsed = pd.to_datetime(frame[candidate], errors="coerce", dayfirst=dayfirst)
-            if parsed.notna().mean() > 0.9:
-                date_column = candidate
+    parsed_dates = None
+    if date_column is not None:
+        parsed_dates = pd.to_datetime(frame[date_column], errors="coerce", dayfirst=dayfirst)
+    else:
+        # Prefer a column actually NAMED like a date, then fall back to
+        # scanning -- but only over columns that survive _looks_like_dates.
+        named = [c for c in frame.columns if _norm(c) in DATE_COLUMN_NAMES]
+        rest = [c for c in frame.columns if _norm(c) not in DATE_COLUMN_NAMES]
+        for candidate in named + rest:
+            parsed = _looks_like_dates(frame[candidate], dayfirst)
+            if parsed is not None:
+                date_column, parsed_dates = candidate, parsed
                 break
-    if date_column is None:
+
+    if date_column is None or parsed_dates is None:
         raise SystemExit(
             "Could not identify a date column. Re-run with --date-column NAME.\n"
             "Columns seen: " + ", ".join(str(c) for c in frame.columns[:12])
         )
 
-    frame[date_column] = pd.to_datetime(frame[date_column], errors="coerce", dayfirst=dayfirst)
+    frame[date_column] = parsed_dates
     frame = frame.dropna(subset=[date_column]).set_index(date_column).sort_index()
     frame.index.name = "date"
+
+    # Fail closed. A degenerate span means the date column is wrong, and every
+    # number downstream -- inferred frequencies, min_separation clustering,
+    # year histograms -- would be silently meaningless. Halt, do not report.
+    span_days = (frame.index.max() - frame.index.min()).days
+    if span_days < 365:
+        raise SystemExit(
+            "Date column %r parsed to a span of only %d days (%s -> %s).\n"
+            "That is not a multi-year panel, so every downstream number would\n"
+            "be meaningless. Re-run with --date-column NAME, adding --dayfirst\n"
+            "if the format is DD/MM/YYYY."
+            % (date_column, span_days, frame.index.min(), frame.index.max())
+        )
+    print("Date column: %r   span: %s -> %s   rows: %d"
+          % (date_column, frame.index.min().date(), frame.index.max().date(), len(frame)))
 
     # Everything else must be numeric; Bloomberg pulls often carry '#N/A' strings.
     for col in frame.columns:
@@ -232,6 +300,21 @@ def section_inventory(frame: pd.DataFrame, index: Dict[str, object]) -> None:
         ))
 
     print("\nMISSING (%d): %s" % (len(missing), ", ".join(missing) if missing else "none"))
+
+    # Say WHY each one missed. A ticker that is visibly present in the CSV
+    # but resolves to None means the header carries a separator or character
+    # the resolver did not anticipate; printing the near-miss makes that
+    # diagnosable in one round instead of a guessing loop.
+    if missing:
+        print("\nNear-miss diagnostic for missing tickers:")
+        squashed_columns = [(_squash(c), c) for c in frame.columns]
+        for entry in missing:
+            ticker = entry.split(" ")[0]
+            key = _squash(ticker)
+            near = [c for sq, c in squashed_columns
+                    if sq.startswith(key[:5]) or key.startswith(sq[:5])][:4]
+            print("  %-12s squash=%-12s candidates: %s"
+                  % (ticker, key, " | ".join(repr(c) for c in near) if near else "none"))
     print("\nTotal columns in CSV: %d   Date span: %s -> %s"
           % (frame.shape[1], frame.index.min().date(), frame.index.max().date()))
 
