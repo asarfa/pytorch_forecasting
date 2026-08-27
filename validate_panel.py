@@ -47,8 +47,9 @@ import pandas as pd
 # Full Bloomberg names, exactly as the panel's headers spell them. Carrying
 # the " Index" / " Curncy" suffix here means the exact-match tier resolves
 # every ticker directly; the normalisation tiers below are a safety net, not
-# the mechanism. The swap curve is USS0* Curncy -- USS01, USS02, USS03, USS05,
-# USS07, USS010, USS020, USS030 -- NOT USSW*, and not bare.
+# the mechanism. The swap curve is USSO* Curncy -- USSO1, USSO2, USSO3, USSO5,
+# USSO7, USSO10, USSO20, USSO30. That is the letter O for Overnight Index
+# Swap, not a zero, and it is not USSW*.
 
 TREASURY = {
     "2Y": "USGG2YR Index", "3Y": "USGG3YR Index", "5Y": "USGG5YR Index",
@@ -56,9 +57,12 @@ TREASURY = {
     "30Y": "USGG30YR Index",
 }
 SWAP = {
-    "2Y": "USS02 Curncy", "3Y": "USS03 Curncy", "5Y": "USS05 Curncy",
-    "7Y": "USS07 Curncy", "10Y": "USS010 Curncy", "20Y": "USS020 Curncy",
-    "30Y": "USS030 Curncy",
+    # USSO = USD Overnight Index Swap. The letter O, NOT a zero: "USSO2", not
+    # "USS02". That single character is why all eight tenors resolved to None
+    # on the first real run and took the ASW oracle down with them.
+    "2Y": "USSO2 Curncy", "3Y": "USSO3 Curncy", "5Y": "USSO5 Curncy",
+    "7Y": "USSO7 Curncy", "10Y": "USSO10 Curncy", "20Y": "USSO20 Curncy",
+    "30Y": "USSO30 Curncy",
 }
 SWAP_SPREAD = {  # Bloomberg's own swap spread, our independent oracle
     "2Y": "USSFCT02 Curncy", "3Y": "USSFCT03 Curncy", "5Y": "USSFCT05 Curncy",
@@ -70,7 +74,7 @@ SWAP_SPREAD = {  # Bloomberg's own swap spread, our independent oracle
 # unresolved. Inventorying the cohort 2 names now costs one extra run of the
 # same code and is what lets us finalise the second cohort without a re-run.
 OTHER = [
-    "USGG12M Index", "USS01 Curncy",                        # front end
+    "USGG12M Index", "USSO1 Curncy",                       # front end
     "MOVE Index", "VIX Index", "NDX Index", "DXY Curncy",   # vol / FTQ
     "GCFRTSY Index", "IRRBIOER Index", "SOFRRATE Index", "US0003M Index",
     "LUMSMD Index",                      # convexity
@@ -347,7 +351,7 @@ def section_asw_oracle(frame: pd.DataFrame, index: Dict[str, object]) -> None:
     print("\n" + "=" * 78)
     print("SECTION 2 -- ASW SIGN AND UNIT ORACLE")
     print("=" * 78)
-    print("Testing   USSFCT{n}  ==  -(USGG{n}YR - USS0{n}) * 100   [bp]")
+    print("Testing   USSFCT{n}  ==  -(USGG{n}YR - USSO{n}) * 100   [bp]")
     print("A near-zero residual confirms BOTH the asset-swap sign convention and")
     print("that USSFCT is in bp while the yield legs are in percent.\n")
     print("%-5s %6s %-11s %-11s %10s %10s %10s"
