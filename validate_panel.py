@@ -44,36 +44,45 @@ import pandas as pd
 # Tickers we need, grouped by the question each group answers.
 # --------------------------------------------------------------------------
 
+# Full Bloomberg names, exactly as the panel's headers spell them. Carrying
+# the " Index" / " Curncy" suffix here means the exact-match tier resolves
+# every ticker directly; the normalisation tiers below are a safety net, not
+# the mechanism. The swap curve is USS0* Curncy -- USS01, USS02, USS03, USS05,
+# USS07, USS010, USS020, USS030 -- NOT USSW*, and not bare.
+
 TREASURY = {
-    "2Y": "USGG2YR", "3Y": "USGG3YR", "5Y": "USGG5YR", "7Y": "USGG7YR",
-    "10Y": "USGG10YR", "20Y": "USGG20YR", "30Y": "USGG30YR",  # 30Y expected absent
+    "2Y": "USGG2YR Index", "3Y": "USGG3YR Index", "5Y": "USGG5YR Index",
+    "7Y": "USGG7YR Index", "10Y": "USGG10YR Index", "20Y": "USGG20YR Index",
+    "30Y": "USGG30YR Index",
 }
 SWAP = {
-    "2Y": "USS02", "3Y": "USS03", "5Y": "USS05", "7Y": "USS07",
-    "10Y": "USS010", "20Y": "USS020", "30Y": "USS030",
+    "2Y": "USS02 Curncy", "3Y": "USS03 Curncy", "5Y": "USS05 Curncy",
+    "7Y": "USS07 Curncy", "10Y": "USS010 Curncy", "20Y": "USS020 Curncy",
+    "30Y": "USS030 Curncy",
 }
 SWAP_SPREAD = {  # Bloomberg's own swap spread, our independent oracle
-    "2Y": "USSFCT02", "3Y": "USSFCT03", "5Y": "USSFCT05", "7Y": "USSFCT07",
-    "10Y": "USSFCT10", "20Y": "USSFCT20", "30Y": "USSFCT30",
+    "2Y": "USSFCT02 Curncy", "3Y": "USSFCT03 Curncy", "5Y": "USSFCT05 Curncy",
+    "7Y": "USSFCT07 Curncy", "10Y": "USSFCT10 Curncy", "20Y": "USSFCT20 Curncy",
+    "30Y": "USSFCT30 Curncy",
 }
 
 # Cohort 1 drivers plus the cohort 2 candidates whose frequency or meaning is
 # unresolved. Inventorying the cohort 2 names now costs one extra run of the
 # same code and is what lets us finalise the second cohort without a re-run.
 OTHER = [
-    "USGG12M", "USS01",                 # front end
-    "MOVE", "VIX", "NDX", "DXY",        # vol / flight-to-quality
-    "GCFRTSY", "IRRBIOER", "SOFRRATE", "US0003M",   # funding
-    "LUMSMD",                            # convexity  (frequency UNCONFIRMED)
-    "KIMWTP10",                          # term premium (revised -- see notes)
-    "CESIUSD",                           # macro surprise proxy
-    "FARBAST",                           # balance sheet
-    "GDBR10", "GBTPGR10",                # cross-market / peripheral
-    # Both spellings: the start-date table said PDPPCC11/PDPPCC3-6 while the
-    # CSV headers say pdppc11/pdppc3-6. Ask for both, let the panel decide.
-    "PDPPTOTG", "PDPPTOTF", "PDPCPCCS", "PDPPPCCS",
-    "PDPPCC11", "PDPPCC3-6", "PDPPC11", "PDPPC3-6",
-    "FDTR", "FEDL01",                    # expected absent; confirms the request
+    "USGG12M Index", "USS01 Curncy",                        # front end
+    "MOVE Index", "VIX Index", "NDX Index", "DXY Curncy",   # vol / FTQ
+    "GCFRTSY Index", "IRRBIOER Index", "SOFRRATE Index", "US0003M Index",
+    "LUMSMD Index",                      # convexity
+    "KIMWTP10 Index",                    # term premium (revised -- see notes)
+    "CESIUSD Index",                     # macro surprise proxy
+    "FARBAST Index",                     # balance sheet
+    "GDBR10 Index", "GBTPGR10 Index",    # cross-market / peripheral
+    # Primary dealer positions. Both spellings: the start-date table said
+    # PDPPCC11/PDPPCC3-6 while the CSV headers say pdppc11/pdppc3-6.
+    "PDPPTOTG Index", "PDPPTOTF Index", "PDPCPCCS Index", "PDPPPCCS Index",
+    "PDPPCC11 Index", "PDPPCC3-6 Index", "PDPPC11 Index", "PDPPC3-6 Index",
+    "FDTR Index", "FEDL01 Index",        # expected absent; confirms the request
 ]
 
 SUFFIXES = (" INDEX", " CURNCY", " COMDTY", " EQUITY", " GOVT")
@@ -273,6 +282,9 @@ def section_inventory(frame: pd.DataFrame, index: Dict[str, object]) -> None:
     print("=" * 78)
     print("SECTION 1 -- PANEL INVENTORY")
     print("=" * 78)
+    def label(t):
+        return _strip_suffix(_norm(t))
+
     print("%-12s %-4s %7s %-11s %-11s %-15s %6s %6s %5s"
           % ("ticker", "have", "n_obs", "start", "end", "freq", "flat%", "maxflat", "neg%"))
 
@@ -282,20 +294,20 @@ def section_inventory(frame: pd.DataFrame, index: Dict[str, object]) -> None:
     missing: List[str] = []
     for ticker in wanted:
         column = resolve(index, ticker)
-        info = describe(ticker, frame[column] if column is not None else None)
+        info = describe(label(ticker), frame[column] if column is not None else None)
         if not info.get("present"):
             missing.append(ticker)
-            print("%-12s %-4s" % (ticker, "NO"))
+            print("%-12s %-4s" % (label(ticker), "NO"))
             continue
         if not info.get("n_obs"):
             # The column exists but is entirely empty. Worth distinguishing
             # from absent: it usually means the vendor returned the ticker
             # with no data rather than the request being wrong.
             missing.append(ticker + " (column present, all-NaN)")
-            print("%-12s %-4s %7d  -- column present but empty --" % (ticker, "yes", 0))
+            print("%-12s %-4s %7d  -- column present but empty --" % (label(ticker), "yes", 0))
             continue
         print("%-12s %-4s %7d %-11s %-11s %-15s %5.1f%% %6d %4.0f%%" % (
-            ticker, "yes", info["n_obs"], info["start"], info["end"], info["freq"],
+            label(ticker), "yes", info["n_obs"], info["start"], info["end"], info["freq"],
             100 * info["flat_share"], info["longest_flat_run"], 100 * info["pct_negative"],
         ))
 
